@@ -1,0 +1,82 @@
+-- =====================================================================
+-- ShipHàn - MVP schema (chỉ cho shipper xem đơn)
+-- PostgreSQL / Supabase. Không cần extension.
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- 1. KHU VỰC - dùng để lọc
+-- ---------------------------------------------------------------------
+create table areas (
+    id          serial primary key,
+    name        text not null,                 -- 'Hải Châu'
+    slug        text unique not null,          -- 'hai-chau'
+    aliases     text[] default '{}',           -- cách viết khác, giúp parser map
+    sort_order  int default 0
+);
+
+-- ---------------------------------------------------------------------
+-- 2. ĐƠN - gộp luôn bài gốc + kết quả parse vào 1 bảng
+-- ---------------------------------------------------------------------
+create table orders (
+    id               bigserial primary key,
+
+    -- nguồn
+    source_name      text,                     -- tên group / 'manual'
+    post_url         text,
+    raw_text         text not null,
+    content_hash     text unique not null,     -- md5(text đã chuẩn hoá) → chống trùng
+    posted_at        timestamptz,
+
+    -- bóc tách
+    pickup_address   text,
+    pickup_area_id   int references areas(id),
+    dropoff_address  text,
+    dropoff_area_id  int references areas(id),
+    ship_fee         int,                      -- VND, null = thương lượng
+    cod_amount       int default 0,
+    need_advance     boolean default false,
+    is_urgent        boolean default false,
+    note             text,                     -- loại hàng, ghi chú
+    contact_phone    text,
+
+    -- trạng thái
+    status           text not null default 'open'
+                     check (status in ('open', 'expired', 'hidden')),
+    created_at       timestamptz default now(),
+    expires_at       timestamptz default now() + interval '3 hours'
+);
+
+create index idx_orders_feed on orders(created_at desc) where status = 'open';
+create index idx_orders_area on orders(pickup_area_id, created_at desc) where status = 'open';
+
+-- ---------------------------------------------------------------------
+-- Query feed cho app
+-- ---------------------------------------------------------------------
+-- tất cả đơn còn hạn:
+--   select * from orders
+--   where status = 'open' and expires_at > now()
+--   order by created_at desc limit 50;
+--
+-- lọc theo khu lấy hàng:
+--   ... and pickup_area_id = any(:area_ids)
+
+-- ---------------------------------------------------------------------
+-- RLS (Supabase): app chỉ được đọc, backend ghi bằng service role
+-- ---------------------------------------------------------------------
+alter table areas  enable row level security;
+alter table orders enable row level security;
+create policy "public read areas"  on areas  for select using (true);
+create policy "public read orders" on orders
+    for select using (status = 'open' and expires_at > now());
+
+-- ---------------------------------------------------------------------
+-- SEED
+-- ---------------------------------------------------------------------
+insert into areas (name, slug, aliases, sort_order) values
+ ('Hải Châu',     'hai-chau',     '{"hc","hai chau","chợ cồn","chợ hàn"}', 1),
+ ('Thanh Khê',    'thanh-khe',    '{"tk","thanh khe"}', 2),
+ ('Sơn Trà',      'son-tra',      '{"st","son tra"}', 3),
+ ('Ngũ Hành Sơn', 'ngu-hanh-son', '{"nhs","ngu hanh son"}', 4),
+ ('Liên Chiểu',   'lien-chieu',   '{"lc","lien chieu"}', 5),
+ ('Cẩm Lệ',       'cam-le',       '{"cl","cam le"}', 6),
+ ('Hòa Vang',     'hoa-vang',     '{"hv","hoa vang"}', 7);
